@@ -24,6 +24,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/log"
+	"encoding/hex"
 )
 
 // emptyCodeHash is used by create to ensure deployment is disallowed to already
@@ -42,6 +44,8 @@ type (
 
 // run runs the given contract and takes care of running precompiles with a fallback to the byte code interpreter.
 func run(evm *EVM, contract *Contract, input []byte) ([]byte, error) {
+	log.Debug("run_contract", "contract_address",contract.Address().String(),
+		"caller_address",contract.caller.Address().String(),"input",hex.EncodeToString(input))
 	if contract.CodeAddr != nil {
 		precompiles := PrecompiledContractsHomestead
 		if evm.ChainConfig().IsByzantium(evm.BlockNumber) {
@@ -341,6 +345,7 @@ func (evm *EVM) Create(caller ContractRef, code []byte, gas uint64, value *big.I
 	}
 	// Create a new account on the state
 	snapshot := evm.StateDB.Snapshot()
+	//contract address is combination of sender address and it's nonce
 	evm.StateDB.CreateAccount(contractAddr)
 	if evm.ChainConfig().IsEIP158(evm.BlockNumber) {
 		evm.StateDB.SetNonce(contractAddr, 1)

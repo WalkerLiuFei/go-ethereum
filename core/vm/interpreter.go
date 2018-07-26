@@ -22,6 +22,9 @@ import (
 
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/log"
+	"runtime"
+	"reflect"
 )
 
 // Config are the configuration options for the Interpreter
@@ -158,6 +161,12 @@ func (in *Interpreter) Run(contract *Contract, input []byte) (ret []byte, err er
 		// enough stack items available to perform the operation.
 		op = contract.GetOp(pc)
 		operation := in.cfg.JumpTable[op]
+
+		log.Debug("execute operation",
+			"Op", opCodeToString[op],
+			"Operation",runtime.FuncForPC(reflect.ValueOf(operation.execute).Pointer()).Name(),
+			"GasCost", runtime.FuncForPC(reflect.ValueOf(operation.gasCost).Pointer()).Name(),
+		);
 		if !operation.valid {
 			return nil, fmt.Errorf("invalid opcode 0x%x", int(op))
 		}
