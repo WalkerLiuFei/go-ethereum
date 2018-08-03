@@ -466,12 +466,23 @@ func (db *Database) dereference(child common.Hash, parent common.Hash) {
 		return
 	}
 	// If there are no more references to the child, delete it and cascade
-	node.parents--
+	if node.parents > 0 {
+		// This is a special cornercase where a node loaded from disk (i.e. not in the
+		// memcache any more) gets reinjected as a new node (short node split into full,
+		// then reverted into short), causing a cached node to have no parents. That is
+		// no problem in itself, but don't make maxint parents out of it.
+		node.parents--
+	}
 	if node.parents == 0 {
 		// Remove the node from the flush-list
-		if child == db.oldest {
+		switch child {
+		case db.oldest:
 			db.oldest = node.flushNext
-		} else {
+			db.nodes[node.flushNext].flushPrev = common.Hash{}
+		case db.newest:
+			db.newest = node.flushPrev
+			db.nodes[node.flushPrev].flushNext = common.Hash{}
+		default:
 			db.nodes[node.flushPrev].flushNext = node.flushNext
 			db.nodes[node.flushNext].flushPrev = node.flushPrev
 		}
@@ -691,9 +702,14 @@ func (db *Database) uncache(hash common.Hash) {
 		return
 	}
 	// Node still exists, remove it from the flush-list
-	if hash == db.oldest {
+	switch hash {
+	case db.oldest:
 		db.oldest = node.flushNext
-	} else {
+		db.nodes[node.flushNext].flushPrev = common.Hash{}
+	case db.newest:
+		db.newest = node.flushPrev
+		db.nodes[node.flushPrev].flushNext = common.Hash{}
+	default:
 		db.nodes[node.flushPrev].flushNext = node.flushNext
 		db.nodes[node.flushNext].flushPrev = node.flushPrev
 	}
@@ -716,4 +732,46 @@ func (db *Database) Size() (common.StorageSize, common.StorageSize) {
 	// counted. For every useful node, we track 2 extra hashes as the flushlist.
 	var flushlistSize = common.StorageSize((len(db.nodes) - 1) * 2 * common.HashLength)
 	return db.nodesSize + flushlistSize, db.preimagesSize
+}
+
+// verifyIntegrity is a debug method to iterate over the entire trie stored in
+// memory and check whether every node is reachable from the meta root. The goal
+// is to find any errors that might cause memory leaks and or trie nodes to go
+// missing.
+//
+// This method is extremely CPU and memory intensive, only use when must.
+func (db *Database) verifyIntegrity() {
+	// Iterate over all the cached nodes and accumulate them into a set
+	reachable := map[common.Hash]struct{}{{}: {}}
+
+	for child := range db.nodes[common.Hash{}].children {
+		db.accumulate(child, reachable)
+	}
+	// Find any unreachable but cached nodes
+	unreachable := []string{}
+	for hash, node := range db.nodes {
+		if _, ok := reachable[hash]; !ok {
+			unreachable = append(unreachable, fmt.Sprintf("%x: {Node: %v, Parents: %d, Prev: %x, Next: %x}",
+				hash, node.node, node.parents, node.flushPrev, node.flushNext))
+		}
+	}
+	if len(unreachable) != 0 {
+		panic(fmt.Sprintf("trie cache memory leak: %v", unreachable))
+	}
+}
+
+// accumulate iterates over the trie defined by hash and accumulates all the
+// cached children found in memory.
+func (db *Database) accumulate(hash common.Hash, reachable map[common.Hash]struct{}) {
+	// Mark the node reachable if present in the memory cache
+	node, ok := db.nodes[hash]
+	if !ok {
+		return
+	}
+	reachable[hash] = struct{}{}
+
+	// Iterate over all the children and accumulate them too
+	for _, child := range node.childs() {
+		db.accumulate(child, reachable)
+	}
 }
